@@ -15,6 +15,7 @@ package plan
 
 import (
 	"github.com/pingcap/tidb/expression"
+	"github.com/pingcap/tidb/model"
 )
 
 // ResolveIndices implements Plan interface.
@@ -106,7 +107,28 @@ func (p *PhysicalMergeJoin) ResolveIndices() {
 }
 
 // ResolveIndices implements Plan interface.
+func (p *PhysicalIndexJoin) ResolveIndices() {
+	p.basePlan.ResolveIndices()
+	lSchema := p.children[0].Schema()
+	rSchema := p.children[1].Schema()
+	for i := range p.InnerJoinKeys {
+		p.OuterJoinKeys[i].ResolveIndices(lSchema)
+		p.InnerJoinKeys[i].ResolveIndices(rSchema)
+	}
+	for _, expr := range p.LeftConditions {
+		expr.ResolveIndices(lSchema)
+	}
+	for _, expr := range p.RightConditions {
+		expr.ResolveIndices(rSchema)
+	}
+	for _, expr := range p.OtherConditions {
+		expr.ResolveIndices(expression.MergeSchema(lSchema, rSchema))
+	}
+}
+
+// ResolveIndices implements Plan interface.
 func (p *PhysicalUnionScan) ResolveIndices() {
+	p.basePlan.ResolveIndices()
 	for _, expr := range p.Conditions {
 		expr.ResolveIndices(p.children[0].Schema())
 	}
@@ -119,9 +141,15 @@ func (p *PhysicalTableReader) ResolveIndices() {
 
 // ResolveIndices implements Plan interface.
 func (p *PhysicalIndexReader) ResolveIndices() {
+	p.basePlan.ResolveIndices()
 	p.indexPlan.ResolveIndices()
 	for _, col := range p.OutputColumns {
-		col.ResolveIndices(p.indexPlan.Schema())
+		if col.ID != model.ExtraHandleID {
+			col.ResolveIndices(p.indexPlan.Schema())
+		} else {
+			// If this is extra handle, then it must be the tail.
+			col.Index = len(p.OutputColumns) - 1
+		}
 	}
 }
 
@@ -200,34 +228,40 @@ func (p *PhysicalApply) ResolveIndices() {
 // ResolveIndices implements Plan interface.
 func (p *Update) ResolveIndices() {
 	p.basePlan.ResolveIndices()
-	orderedList := make([]*expression.Assignment, len(p.OrderedList))
 	schema := p.children[0].Schema()
-	for _, v := range p.OrderedList {
-		if v == nil {
-			continue
-		}
-		orderedList[schema.ColumnIndex(v.Col)] = v
+	for _, assign := range p.OrderedList {
+		assign.Col.ResolveIndices(schema)
+		assign.Expr.ResolveIndices(schema)
 	}
-	for i := 0; i < len(orderedList); i++ {
-		if orderedList[i] == nil {
-			continue
-		}
-		orderedList[i].Col.ResolveIndices(schema)
-		orderedList[i].Expr.ResolveIndices(schema)
-	}
-	p.OrderedList = orderedList
 }
 
 // ResolveIndices implements Plan interface.
 func (p *Insert) ResolveIndices() {
 	p.basePlan.ResolveIndices()
 	for _, asgn := range p.OnDuplicate {
+		asgn.Col.ResolveIndices(p.tableSchema)
+		asgn.Expr.ResolveIndices(p.tableSchema)
+	}
+	for _, set := range p.Setlist {
+		set.Col.ResolveIndices(p.tableSchema)
+		set.Expr.ResolveIndices(p.tableSchema)
+	}
+	for _, expr := range p.GenCols.Exprs {
+		expr.ResolveIndices(p.tableSchema)
+	}
+	for _, asgn := range p.GenCols.OnDuplicates {
+		asgn.Col.ResolveIndices(p.tableSchema)
 		asgn.Expr.ResolveIndices(p.tableSchema)
 	}
 }
 
 // ResolveIndices implements Plan interface.
 func (p *basePlan) ResolveIndices() {
+	for _, cols := range p.schema.TblID2Handle {
+		for _, col := range cols {
+			col.ResolveIndices(p.schema)
+		}
+	}
 	for _, child := range p.children {
 		child.ResolveIndices()
 	}

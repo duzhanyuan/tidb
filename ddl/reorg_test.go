@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/util/testleak"
 	"github.com/pingcap/tidb/util/types"
+	goctx "golang.org/x/net/context"
 )
 
 type testCtxKeyType int
@@ -37,7 +38,7 @@ func (s *testDDLSuite) TestReorg(c *C) {
 	store := testCreateStore(c, "test_reorg")
 	defer store.Close()
 
-	d := newDDL(store, nil, nil, testLease)
+	d := testNewDDL(goctx.Background(), nil, store, nil, nil, testLease)
 	defer d.Stop()
 
 	time.Sleep(testLease)
@@ -88,7 +89,7 @@ func (s *testDDLSuite) TestReorg(c *C) {
 		return nil
 	})
 	c.Assert(err, NotNil)
-	d.start()
+	d.start(goctx.Background())
 
 	job = &model.Job{
 		ID:       1,
@@ -126,14 +127,14 @@ func (s *testDDLSuite) TestReorgOwner(c *C) {
 	store := testCreateStore(c, "test_reorg_owner")
 	defer store.Close()
 
-	d1 := newDDL(store, nil, nil, testLease)
+	d1 := testNewDDL(goctx.Background(), nil, store, nil, nil, testLease)
 	defer d1.Stop()
 
 	ctx := testNewContext(d1)
 
-	testCheckOwner(c, d1, true, ddlJobFlag)
+	testCheckOwner(c, d1, true)
 
-	d2 := newDDL(store, nil, nil, testLease)
+	d2 := testNewDDL(goctx.Background(), nil, store, nil, nil, testLease)
 	defer d2.Stop()
 
 	dbInfo := testSchemaInfo(c, d1, "test")
@@ -141,7 +142,6 @@ func (s *testDDLSuite) TestReorgOwner(c *C) {
 
 	tblInfo := testTableInfo(c, d1, "t", 3)
 	testCreateTable(c, ctx, d1, dbInfo, tblInfo)
-
 	t := testGetTable(c, d1, dbInfo.ID, tblInfo.ID)
 
 	num := 10
@@ -153,14 +153,14 @@ func (s *testDDLSuite) TestReorgOwner(c *C) {
 	err := ctx.Txn().Commit()
 	c.Assert(err, IsNil)
 
-	tc := &testDDLCallback{}
+	tc := &TestDDLCallback{}
 	tc.onJobRunBefore = func(job *model.Job) {
 		if job.SchemaState == model.StateDeleteReorganization {
 			d1.Stop()
 		}
 	}
 
-	d1.setHook(tc)
+	d1.SetHook(tc)
 
 	testDropSchema(c, ctx, d1, dbInfo)
 

@@ -15,6 +15,7 @@ package plan
 
 import (
 	"github.com/pingcap/tidb/context"
+	"github.com/pingcap/tidb/expression"
 )
 
 const (
@@ -60,6 +61,8 @@ const (
 	TypeHashRightJoin = "HashRightJoin"
 	// TypeMergeJoin is the type of merge join.
 	TypeMergeJoin = "MergeJoin"
+	// TypeIndexJoin is the type of index look up join.
+	TypeIndexJoin = "IndexJoin"
 	// TypeApply is the type of Apply.
 	TypeApply = "Apply"
 	// TypeMaxOneRow is the type of MaxOneRow.
@@ -279,6 +282,7 @@ func (p PhysicalIndexLookUpReader) init(allocator *idAllocator, ctx context.Cont
 	p.basePhysicalPlan = newBasePhysicalPlan(p.basePlan)
 	p.TablePlans = flattenPushDownPlan(p.tablePlan)
 	p.IndexPlans = flattenPushDownPlan(p.indexPlan)
+	p.NeedColHandle = p.IndexPlans[0].(*PhysicalIndexScan).NeedColHandle
 	p.schema = p.tablePlan.Schema()
 	return &p
 }
@@ -287,6 +291,7 @@ func (p PhysicalTableReader) init(allocator *idAllocator, ctx context.Context) *
 	p.basePlan = newBasePlan(TypeTableReader, allocator, ctx, &p)
 	p.basePhysicalPlan = newBasePhysicalPlan(p.basePlan)
 	p.TablePlans = flattenPushDownPlan(p.tablePlan)
+	p.NeedColHandle = p.TablePlans[0].(*PhysicalTableScan).NeedColHandle
 	p.schema = p.tablePlan.Schema()
 	return &p
 }
@@ -295,13 +300,22 @@ func (p PhysicalIndexReader) init(allocator *idAllocator, ctx context.Context) *
 	p.basePlan = newBasePlan(TypeIndexReader, allocator, ctx, &p)
 	p.basePhysicalPlan = newBasePhysicalPlan(p.basePlan)
 	p.IndexPlans = flattenPushDownPlan(p.indexPlan)
+	p.NeedColHandle = p.IndexPlans[0].(*PhysicalIndexScan).NeedColHandle
 	if _, ok := p.indexPlan.(*PhysicalAggregation); ok {
 		p.schema = p.indexPlan.Schema()
 	} else {
 		is := p.IndexPlans[0].(*PhysicalIndexScan)
 		p.schema = is.dataSourceSchema
 	}
-	p.OutputColumns = p.schema.Columns
+	p.OutputColumns = p.schema.Clone().Columns
+	return &p
+}
+
+func (p PhysicalIndexJoin) init(allocator *idAllocator, ctx context.Context, children ...Plan) *PhysicalIndexJoin {
+	p.basePlan = newBasePlan(TypeIndexJoin, allocator, ctx, &p)
+	p.basePhysicalPlan = newBasePhysicalPlan(p.basePlan)
+	p.children = children
+	p.schema = expression.MergeSchema(p.children[0].Schema(), p.children[1].Schema())
 	return &p
 }
 

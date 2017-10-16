@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/table"
 	"github.com/pingcap/tidb/util/testleak"
+	goctx "golang.org/x/net/context"
 )
 
 var _ = Suite(&testForeighKeySuite{})
@@ -110,7 +111,7 @@ func getForeignKey(t table.Table, name string) *model.FKInfo {
 
 func (s *testForeighKeySuite) TestForeignKey(c *C) {
 	defer testleak.AfterTest(c)()
-	d := newDDL(s.store, nil, nil, testLease)
+	d := testNewDDL(goctx.Background(), nil, s.store, nil, nil, testLease)
 	defer d.Stop()
 	s.d = d
 	s.dbInfo = testSchemaInfo(c, d, "test_foreign")
@@ -131,14 +132,15 @@ func (s *testForeighKeySuite) TestForeignKey(c *C) {
 	var mu sync.Mutex
 	checkOK := false
 	var hookErr error
-	tc := &testDDLCallback{}
+	tc := &TestDDLCallback{}
 	tc.onJobUpdated = func(job *model.Job) {
 		if job.State != model.JobDone {
 			return
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		t, err := testGetTableWithError(d, s.dbInfo.ID, tblInfo.ID)
+		var t table.Table
+		t, err = testGetTableWithError(d, s.dbInfo.ID, tblInfo.ID)
 		if err != nil {
 			hookErr = errors.Trace(err)
 			return
@@ -150,10 +152,10 @@ func (s *testForeighKeySuite) TestForeignKey(c *C) {
 		}
 		checkOK = true
 	}
-	d.setHook(tc)
+	d.SetHook(tc)
 
 	d.Stop()
-	d.start()
+	d.start(goctx.Background())
 
 	job := s.testCreateForeignKey(c, tblInfo, "c1_fk", []string{"c1"}, "t2", []string{"c1"}, ast.ReferOptionCascade, ast.ReferOptionSetNull)
 	testCheckJobDone(c, d, job, true)
@@ -177,7 +179,8 @@ func (s *testForeighKeySuite) TestForeignKey(c *C) {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		t, err := testGetTableWithError(d, s.dbInfo.ID, tblInfo.ID)
+		var t table.Table
+		t, err = testGetTableWithError(d, s.dbInfo.ID, tblInfo.ID)
 		if err != nil {
 			hookErr = errors.Trace(err)
 			return
@@ -191,7 +194,7 @@ func (s *testForeighKeySuite) TestForeignKey(c *C) {
 	}
 
 	d.Stop()
-	d.start()
+	d.start(goctx.Background())
 
 	job = testDropForeignKey(c, ctx, d, s.dbInfo, tblInfo, "c1_fk")
 	testCheckJobDone(c, d, job, false)
@@ -209,7 +212,7 @@ func (s *testForeighKeySuite) TestForeignKey(c *C) {
 	}
 
 	d.Stop()
-	d.start()
+	d.start(goctx.Background())
 
 	job = testDropTable(c, ctx, d, s.dbInfo, tblInfo)
 	testCheckJobDone(c, d, job, false)

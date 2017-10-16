@@ -14,7 +14,7 @@
 package json
 
 import (
-	"encoding/json"
+	"fmt"
 	"testing"
 
 	. "github.com/pingcap/check"
@@ -28,49 +28,91 @@ func TestT(t *testing.T) {
 	TestingT(t)
 }
 
-func (s *testJSONSuite) TestJSONSerde(c *C) {
-	var jstr1 = `{"a": [1, "2", {"aa": "bb"}, 4.0], "b": true}`
-	j1, err := ParseFromString(jstr1)
-	c.Assert(err, IsNil)
+// mustParseFromString parse a JSON from a string.
+// Panic if string is not a valid JSON.
+func mustParseFromString(s string) JSON {
+	j, err := ParseFromString(s)
+	if err != nil {
+		msg := fmt.Sprintf("ParseFromString(%s) fail", s)
+		panic(msg)
+	}
+	return j
+}
 
-	var jstr2 = `[{"a": 1, "b": true}, 3, 3.5, "hello, world", null, true]`
-	j2, err := ParseFromString(jstr2)
-	c.Assert(err, IsNil)
+func (s *testJSONSuite) TestParseFromString(c *C) {
+	jstr1 := `{"a": [1, "2", {"aa": "bb"}, 4, null], "b": true, "c": null}`
+	jstr2 := mustParseFromString(jstr1).String()
+	c.Assert(jstr2, Equals, `{"a":[1,"2",{"aa":"bb"},4,null],"b":true,"c":null}`)
+}
 
-	var jsonNilValue = jsonLiteral(0x00)
-	var jsonBoolValue = jsonLiteral(0x01)
-	var jsonDoubleValue = jsonDouble(3.24)
-	var jsonStringValue = jsonString("hello, 世界")
+func (s *testJSONSuite) TestSerializeAndDeserialize(c *C) {
+	var jsonNilValue = CreateJSON(nil)
+	var jsonBoolValue = CreateJSON(true)
+	var jsonUintValue = CreateJSON(uint64(1 << 63))
+	var jsonDoubleValue = CreateJSON(3.24)
+	var jsonStringValue = CreateJSON("hello, 世界")
+	j1 := mustParseFromString(`{"aaaaaaaaaaa": [1, "2", {"aa": "bb"}, 4.0], "bbbbbbbbbb": true, "ccccccccc": "d"}`)
+	j2 := mustParseFromString(`[{"a": 1, "b": true}, 3, 3.5, "hello, world", null, true]`)
 
-	var testcses = []struct {
-		In  JSON
-		Out JSON
+	var testcases = []struct {
+		In   JSON
+		Out  JSON
+		size int
 	}{
-		{In: jsonNilValue, Out: jsonNilValue},
-		{In: jsonBoolValue, Out: jsonBoolValue},
-		{In: jsonDoubleValue, Out: jsonDoubleValue},
-		{In: jsonStringValue, Out: jsonStringValue},
-		{In: j1, Out: j1},
-		{In: j2, Out: j2},
+		{In: jsonNilValue, Out: jsonNilValue, size: 2},
+		{In: jsonBoolValue, Out: jsonBoolValue, size: 2},
+		{In: jsonUintValue, Out: jsonUintValue, size: 9},
+		{In: jsonDoubleValue, Out: jsonDoubleValue, size: 9},
+		{In: jsonStringValue, Out: jsonStringValue, size: 15},
+		{In: j1, Out: j1, size: 144},
+		{In: j2, Out: j2, size: 108},
 	}
 
-	for _, s := range testcses {
+	for _, s := range testcases {
 		data := Serialize(s.In)
 		t, err := Deserialize(data)
 		c.Assert(err, IsNil)
 
-		v1, _ := json.Marshal(t)
-		v2, _ := json.Marshal(s.Out)
-		c.Assert(string(v1), Equals, string(v2))
+		v1 := t.String()
+		v2 := s.Out.String()
+		c.Assert(v1, Equals, v2)
+
+		size, err := PeekBytesAsJSON(data)
+		c.Assert(err, IsNil)
+		c.Assert(len(data), Equals, size)
+		c.Assert(len(data), Equals, s.size)
 	}
 }
 
-func (s *testJSONSuite) TestParseFromString(c *C) {
-	var jstr1 = `{"a": [1, "2", {"aa": "bb"}, 4, null], "b": true, "c": null}`
+func (s *testJSONSuite) TestCompareJSON(c *C) {
+	jNull := mustParseFromString(`null`)
+	jBoolTrue := mustParseFromString(`true`)
+	jBoolFalse := mustParseFromString(`false`)
+	jIntegerLarge := CreateJSON(uint64(1 << 63))
+	jIntegerSmall := mustParseFromString(`3`)
+	jStringLarge := mustParseFromString(`"hello, world"`)
+	jStringSmall := mustParseFromString(`"hello"`)
+	jArrayLarge := mustParseFromString(`["a", "c"]`)
+	jArraySmall := mustParseFromString(`["a", "b"]`)
+	jObject := mustParseFromString(`{"a": "b"}`)
 
-	j1, err := ParseFromString(jstr1)
-	c.Assert(err, IsNil)
-
-	var jstr2 = j1.String()
-	c.Assert(jstr2, Equals, `{"a":[1,"2",{"aa":"bb"},4,null],"b":true,"c":null}`)
+	var tests = []struct {
+		left  JSON
+		right JSON
+	}{
+		{jNull, jIntegerSmall},
+		{jIntegerSmall, jIntegerLarge},
+		{jIntegerLarge, jStringSmall},
+		{jStringSmall, jStringLarge},
+		{jStringLarge, jObject},
+		{jObject, jArraySmall},
+		{jArraySmall, jArrayLarge},
+		{jArrayLarge, jBoolFalse},
+		{jBoolFalse, jBoolTrue},
+	}
+	for _, tt := range tests {
+		cmp, err := CompareJSON(tt.left, tt.right)
+		c.Assert(err, IsNil)
+		c.Assert(cmp < 0, IsTrue)
+	}
 }

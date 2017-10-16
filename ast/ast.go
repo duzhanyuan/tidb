@@ -155,6 +155,13 @@ type ResultSetNode interface {
 	SetResultFields(fields []*ResultField)
 }
 
+// SensitiveStmtNode overloads StmtNode and provides a SecureText method.
+type SensitiveStmtNode interface {
+	StmtNode
+	// SecureText is different from Text that it hide password information.
+	SecureText() string
+}
+
 // Statement is an interface for SQL execution.
 // NOTE: all Statement implementations must be safe for
 // concurrent using by multiple goroutines.
@@ -166,6 +173,9 @@ type Statement interface {
 
 	// Exec executes SQL and gets a Recordset.
 	Exec(ctx context.Context) (RecordSet, error)
+
+	// IsPrepared returns whether this statement is prepared statement.
+	IsPrepared() bool
 }
 
 // Visitor visits a Node.
